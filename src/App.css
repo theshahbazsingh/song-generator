@@ -440,6 +440,40 @@ body {
   display: flex;
   justify-content: center;
   margin: 25px 0;
+  position: relative;
+}
+
+.loading-animation::before {
+  content: "♪";
+  position: absolute;
+  left: -20px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 1.5rem;
+  color: var(--primary-light);
+  opacity: 0.5;
+  animation: bounce 1.5s infinite ease-in-out alternate;
+}
+
+.loading-animation::after {
+  content: "♫";
+  position: absolute;
+  right: -20px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 1.5rem;
+  color: var(--accent);
+  opacity: 0.5;
+  animation: bounce 1.5s infinite ease-in-out alternate-reverse;
+}
+
+@keyframes bounce {
+  from {
+    transform: translateY(-50%) scale(0.8);
+  }
+  to {
+    transform: translateY(-50%) scale(1.2);
+  }
 }
 
 @keyframes wave {
@@ -480,6 +514,26 @@ body {
   animation-delay: 0.2s;
 }
 
+/* Status update text */
+.loading-container p {
+  color: var(--primary);
+  font-weight: 500;
+  margin-bottom: 10px;
+  position: relative;
+  display: inline-block;
+}
+
+.loading-container p::after {
+  content: '';
+  position: absolute;
+  bottom: -5px;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(to right, transparent, var(--primary-light), transparent);
+  border-radius: 2px;
+}
+
 .loading-note {
   color: var(--dark);
   font-size: 1rem;
@@ -495,14 +549,64 @@ body {
   padding: 8px 0;
 }
 
+/* Error container improved styling */
 .error-container {
   background-color: #fff0f3;
   border: 1px solid #ffccd5;
   color: var(--danger);
-  padding: 15px 20px;
+  padding: 18px 20px;
   border-radius: 10px;
   margin-top: 20px;
+  text-align: center;
+  box-shadow: 0 2px 4px rgba(255, 118, 117, 0.15);
+  position: relative;
+}
+
+.error-container p {
+  margin-bottom: 10px;
   font-weight: 500;
+}
+
+.error-container::before {
+  content: "!";
+  position: absolute;
+  top: -15px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 30px;
+  height: 30px;
+  background-color: var(--danger);
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 1.2rem;
+}
+
+/* Retry button */
+.retry-button {
+  background: var(--gradient-secondary);
+  color: white;
+  border: none;
+  border-radius: 20px;
+  padding: 8px 18px;
+  margin-top: 15px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s;
+  font-family: var(--font-main);
+}
+
+.retry-button:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+}
+
+.retry-button:active {
+  transform: translateY(1px);
 }
 
 /* Development note */
@@ -517,6 +621,41 @@ body {
   display: inline-block;
 }
 
+/* Keyboard tip styling */
+.keyboard-tip {
+  text-align: center;
+  margin-top: 15px;
+  font-size: 0.85rem;
+  color: var(--dark);
+  opacity: 0.7;
+}
+
+.keyboard-tip kbd {
+  background-color: #f3f3ff;
+  border: 1px solid #d0d0ff;
+  border-radius: 4px;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.1);
+  color: var(--primary);
+  display: inline-block;
+  font-family: var(--font-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 3px 6px;
+  white-space: nowrap;
+}
+
+/* Disabled button styling */
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+button:disabled:hover {
+  transform: none;
+  box-shadow: none;
+}
+
 /* Footer */
 .app-footer {
   text-align: center;
@@ -529,6 +668,28 @@ body {
 
 .app-footer p {
   margin: 5px 0;
+}
+
+/* Suno credit styling */
+.suno-credit {
+  text-align: center;
+  margin-top: 25px;
+  padding-top: 15px;
+  border-top: 1px dashed #e0e0ff;
+  font-size: 0.9rem;
+  color: var(--dark);
+}
+
+.suno-credit a {
+  color: var(--primary);
+  font-weight: 600;
+  text-decoration: none;
+  transition: all 0.2s;
+}
+
+.suno-credit a:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 /* Music note decorations */

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { OpenAI } from 'openai';
 import './App.css';
@@ -18,8 +18,28 @@ function App() {
   const [lyrics, setLyrics] = useState('');
   const [songUrl, setSongUrl] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [lyricsLoading, setLyricsLoading] = useState(false);
   const [error, setError] = useState('');
   const [songGenerationId, setSongGenerationId] = useState('');
+  const [hasAttemptedSongGeneration, setHasAttemptedSongGeneration] = useState(false);
+  const [pollingStatus, setPollingStatus] = useState('');
+  
+  // Update document title on component mount
+  useEffect(() => {
+    document.title = "Learn Through Music | Educational Song Generator";
+  }, []);
+  
+  // Refs for form inputs to enable keyboard navigation
+  const inputRefs = {
+    name: useRef(null),
+    age: useRef(null),
+    grade: useRef(null),
+    topic: useRef(null)
+  };
+
+  // Max retries for API calls
+  const MAX_RETRIES = 3;
+  const POLLING_INTERVAL = 5000; // 5 seconds
 
   // OpenAI client instance
   const openai = new OpenAI({
@@ -62,9 +82,36 @@ function App() {
     { id: 'musicGenre', text: "What type of music genre do you prefer? Pop, Hip hop, Rock, or Soul?" }
   ];
 
+  // Handle keypress events for navigation
+  const handleKeyPress = useCallback((e) => {
+    if (e.key === 'Enter' && !isLoading && !lyricsLoading) {
+      handleNext();
+    }
+  }, [step, name, age, grade, subject, topic, learningType, musicGenre, isLoading, lyricsLoading]);
+
+  // Set up key listeners for each step
+  useEffect(() => {
+    document.addEventListener('keydown', handleKeyPress);
+    
+    // Focus the appropriate input field based on the current step
+    if (step === 1 && inputRefs.name.current) {
+      inputRefs.name.current.focus();
+    } else if (step === 2 && inputRefs.age.current) {
+      inputRefs.age.current.focus();
+    } else if (step === 3 && inputRefs.grade.current) {
+      inputRefs.grade.current.focus();
+    } else if (step === 5 && inputRefs.topic.current) {
+      inputRefs.topic.current.focus();
+    }
+    
+    return () => {
+      document.removeEventListener('keydown', handleKeyPress);
+    };
+  }, [step, handleKeyPress]);
+
   // Generate lyrics using OpenAI SDK
   const generateLyrics = async () => {
-    setIsLoading(true);
+    setLyricsLoading(true);
     setError('');
     
     try {
@@ -102,9 +149,9 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
       
     } catch (err) {
       console.error('Error generating lyrics:', err);
-      setError('Failed to generate lyrics: ' + err.message);
+      setError(`Failed to generate lyrics: ${err.message || 'Unknown error occurred'}. Please try again.`);
     } finally {
-      setIsLoading(false);
+      setLyricsLoading(false);
     }
   };
 
@@ -112,24 +159,25 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
   const generateSong = async () => {
     setIsLoading(true);
     setError('');
+    setPollingStatus('Preparing to create your song...');
+    setHasAttemptedSongGeneration(true); // Mark that we've tried to generate a song
     
     try {
       // Create a title from the subject and topic
       const songTitle = `${subject} - ${topic} Learning Song`;
       
-      // Create data object for the song generation API based on documentation
+      // Create data object for the song generation API
       const songData = {
-        prompt: lyrics,                  // Using our generated lyrics as the prompt (will be exact lyrics)
-        style: musicGenre,               // The music style/genre
-        title: songTitle,                // Title of the track
-        customMode: true,                // Using custom mode since we have specific lyrics
-        instrumental: false,             // We want vocals for our educational songs
-        model: "V3_5",                   // Using V3_5 model
+        prompt: lyrics,                  
+        style: musicGenre,               
+        title: songTitle,                
+        customMode: true,                
+        instrumental: false,             
+        model: "V3_5",                   
         negativeTags: "Explicit language, Inappropriate content",
-        callBackUrl: window.location.origin + "/callback"  // Using current origin with /callback
+        callBackUrl: window.location.origin + "/callback"  
       };
       
-      // Log the request data for debugging
       console.log("Song generation request:", songData);
       
       // Step 1: Initiate song generation with the API
@@ -141,7 +189,8 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
             'Content-Type': 'application/json',
             'Accept': 'application/json',
             'Authorization': `Bearer ${process.env.REACT_APP_SUNO_API_KEY}`
-          }
+          },
+          timeout: 30000 // 30 second timeout
         }
       );
       
@@ -152,75 +201,183 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
         throw new Error(`API Error: ${createResponse.data.msg || 'Unknown error'}`);
       }
       
-      // Store the task ID for polling - adjust based on actual response structure
-      const taskId = createResponse.data.data?.task_id || createResponse.data.data?.id;
+      // Extract the task ID - check ALL possible formats from API response
+      // The API seems to return taskId (camelCase) but our code was looking for task_id (snake_case)
+      const taskId = createResponse.data.data?.taskId || 
+                     createResponse.data.data?.task_id || 
+                     createResponse.data.data?.id;
+      
+      if (!taskId) {
+        throw new Error('No task ID found in API response. The song might still be generating. Check the Suno dashboard before trying again.');
+      }
+      
       setSongGenerationId(taskId);
+      setPollingStatus('Song generation started. Creating your educational song...');
       
-      // Step 2: Poll for song generation completion
-      const checkSongStatus = async () => {
-        try {
-          const statusResponse = await axios.get(
-            `https://apibox.erweima.ai/api/v1/task/${taskId}`,
-            {
-              headers: {
-                'Accept': 'application/json',
-                'Authorization': `Bearer ${process.env.REACT_APP_SUNO_API_KEY}`
-              }
-            }
-          );
-          
-          console.log("Status response:", statusResponse.data);
-          
-          // Check if the status API request was successful
-          if (statusResponse.data.code !== 200) {
-            throw new Error(`Status API Error: ${statusResponse.data.msg || 'Unknown error'}`);
-          }
-          
-          // Extract status from response - adjust based on actual response structure
-          const status = statusResponse.data.data?.status;
-          
-          if (status === 'completed' || status === 'complete') {
-            // Song is ready, get the URL
-            // The structure here depends on the actual API response
-            const audioUrl = statusResponse.data.data?.data?.[0]?.audio_url || 
-                            statusResponse.data.data?.audio_url;
-                            
-            if (!audioUrl) {
-              throw new Error('No audio URL found in the completed response');
-            }
-            
-            setSongUrl(audioUrl);
-            setIsLoading(false);
-          } else if (status === 'failed' || status === 'error') {
-            setError('Song generation failed. Please try again.');
-            setIsLoading(false);
-          } else {
-            // Still processing, check again after delay
-            setTimeout(checkSongStatus, 5000); // Poll every 5 seconds
-          }
-        } catch (err) {
-          console.error('Error checking song status:', err);
-          setError('Failed to check song status: ' + (err.message || 'Unknown error'));
-          setIsLoading(false);
-        }
-      };
-      
-      // Start polling
-      checkSongStatus();
+      // Start polling for completion
+      pollSongStatus(taskId, 0);
       
     } catch (err) {
       console.error('Error initiating song generation:', err);
-      setError('Failed to start song generation. Please try again.');
+      
+      // Detect rate limiting issues
+      const isRateLimited = 
+        (err.response && err.response.status === 429) || 
+        (err.message && err.message.includes('frequency is too high')) ||
+        (err.message && err.message.includes('rate limit')) ||
+        (err.message && err.message.toLowerCase().includes('too many requests'));
+      
+      // Set appropriate error message based on error type
+      if (err.code === 'ECONNABORTED' || err.message.includes('timeout')) {
+        setError('Connection timeout. The server is taking too long to respond. Please try again later.');
+      } else if (isRateLimited) {
+        setError('The Suno API is currently busy. Please wait a few minutes and try again.');
+      } else if (err.response && err.response.status === 401) {
+        setError('Authentication failed. Please check your API credentials.');
+      } else if (err.message.includes('No task ID')) {
+        setError('Your song request was sent, but we couldn\'t get a confirmation. Please check the Suno dashboard before trying again to avoid duplicate songs.');
+      } else {
+        setError(`Failed to start song generation: ${err.message || 'Unknown error'}. Please try again after a few minutes.`);
+      }
+      
+      // Always end loading state on error - no retries
       setIsLoading(false);
+    }
+  };
+
+  // Poll for song generation completion
+  const pollSongStatus = async (taskId, attempt = 0) => {
+    // Safety check to prevent infinite polling
+    if (attempt > 60) { // Stop after 5 minutes (60 * 5s = 300s = 5min)
+      setError('Song generation is taking longer than expected. The song might still be generating. Please check Suno dashboard or try again later.');
+      setIsLoading(false);
+      return;
+    }
+    
+    try {
+      setPollingStatus(`Checking song status... (Attempt ${attempt + 1})`);
+      
+      // Use the correct endpoint for checking task status as per the Suno API documentation
+      const statusResponse = await axios.get(
+        `https://apibox.erweima.ai/api/v1/generate/record-info`, 
+        {
+          params: { taskId: taskId },
+          headers: {
+            'Accept': 'application/json',
+            'Authorization': `Bearer ${process.env.REACT_APP_SUNO_API_KEY}`
+          },
+          timeout: 10000 // 10 second timeout for status checks
+        }
+      );
+      
+      console.log("Status response:", statusResponse.data);
+      
+      // Check if the API request was successful
+      if (statusResponse.data.code !== 200) {
+        throw new Error(`Status API Error: ${statusResponse.data.msg || 'Unknown error'}`);
+      }
+      
+      // Extract status from response - based on the actual response structure from the logs
+      const status = statusResponse.data.data?.status;
+      
+      if (status === 'SUCCESS') {
+        // Based on the error log, the audio URLs are in data.response.sunoData
+        let audioUrl = null;
+        
+        // Check if sunoData exists and has items
+        if (statusResponse.data.data?.response?.sunoData && 
+            Array.isArray(statusResponse.data.data.response.sunoData) && 
+            statusResponse.data.data.response.sunoData.length > 0) {
+          
+          // Get the first item's audioUrl - this is the correct path based on the error log
+          audioUrl = statusResponse.data.data.response.sunoData[0]?.audioUrl;
+          
+          console.log("Found audio URL:", audioUrl);
+        }
+        
+        // Fallbacks in case the structure is different
+        if (!audioUrl) {
+          // Try other possible locations
+          if (statusResponse.data.data?.audioUrl) {
+            audioUrl = statusResponse.data.data.audioUrl;
+          } else if (statusResponse.data.data?.response?.audioUrl) {
+            audioUrl = statusResponse.data.data.response.audioUrl;
+          } else if (statusResponse.data.data?.response?.results && 
+                   Array.isArray(statusResponse.data.data.response.results) && 
+                   statusResponse.data.data.response.results.length > 0) {
+            audioUrl = statusResponse.data.data.response.results[0]?.audioUrl || 
+                      statusResponse.data.data.response.results[0]?.audio_url;
+          }
+        }
+        
+        if (!audioUrl) {
+          console.error("Could not find audio URL in response:", statusResponse.data);
+          throw new Error('No audio URL found in the completed response. Your song may have been generated but the URL is unavailable. Please check the Suno dashboard.');
+        }
+        
+        setSongUrl(audioUrl);
+        setIsLoading(false);
+        setPollingStatus('');
+      } else if (status === 'CREATE_TASK_FAILED' || status === 'GENERATE_AUDIO_FAILED' || 
+                 status === 'CALLBACK_EXCEPTION' || status === 'SENSITIVE_WORD_ERROR') {
+        // These are error statuses according to the documentation
+        const errorMessage = statusResponse.data.data?.errorMessage || 'Song generation failed';
+        setError(`Song creation error: ${errorMessage}. Please try again.`);
+        setIsLoading(false);
+        setPollingStatus('');
+      } else if (status === 'PENDING' || status === 'TEXT_SUCCESS' || status === 'FIRST_SUCCESS') {
+        // These are intermediate statuses according to the documentation
+        // Map the status to a user-friendly message - make it more intuitive without technical details
+        let statusMessage = 'Creating your song...';
+        let progressPercentage = 25;
+        
+        if (status === 'PENDING') {
+          statusMessage = `Starting to create your song...`;
+          progressPercentage = 25;
+        } else if (status === 'TEXT_SUCCESS') {
+          statusMessage = `Working on your ${musicGenre} song about ${topic}...`;
+          progressPercentage = 50;
+        } else if (status === 'FIRST_SUCCESS') {
+          statusMessage = `Almost done! Putting the finishing touches on your song...`;
+          progressPercentage = 75;
+        }
+        
+        setPollingStatus(`${statusMessage} (${progressPercentage}% complete)`);
+        
+        // Still processing, check again after delay
+        setTimeout(() => pollSongStatus(taskId, attempt + 1), POLLING_INTERVAL);
+      } else {
+        // Unknown status
+        setPollingStatus(`Creating your song... Please wait.`);
+        setTimeout(() => pollSongStatus(taskId, attempt + 1), POLLING_INTERVAL);
+      }
+    } catch (err) {
+      console.error('Error checking song status:', err);
+      
+      // Only handle errors with continued polling - don't retry status checks if they fail badly
+      if (err.code === 'ECONNABORTED' || err.message.includes('timeout')) {
+        setPollingStatus('Your song is still being created. Please wait...');
+        setTimeout(() => pollSongStatus(taskId, attempt + 1), POLLING_INTERVAL);
+      } else if (err.response && err.response.status === 429) {
+        setPollingStatus('Still working on your song. This may take a minute...');
+        // Wait longer between polls if we're hitting rate limits
+        setTimeout(() => pollSongStatus(taskId, attempt + 1), POLLING_INTERVAL * 2);
+      } else {
+        // For other errors, stop polling and show error message
+        setError(`Status check error: ${err.message}. Your song might still be generating in the background. Please check Suno dashboard.`);
+        setIsLoading(false);
+        setPollingStatus('');
+      }
     }
   };
 
   // Handle song generation after lyrics are created
   useEffect(() => {
-    if (lyrics && step === 8 && !songUrl && !isLoading) {
+    // Only auto-generate if we have lyrics, we're on the right step, and we haven't tried yet
+    if (lyrics && step === 8 && !songUrl && !isLoading && !lyricsLoading && !hasAttemptedSongGeneration) {
       generateSong();
     }
-  }, [lyrics, step, songUrl, isLoading]);
+  }, [lyrics, step, songUrl, isLoading, lyricsLoading, hasAttemptedSongGeneration]);
 
   // Handle next step in questionnaire
   const handleNext = () => {
@@ -263,6 +420,39 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
   const handleBack = () => {
     if (step > 0) {
       setStep(step - 1);
+      // Clear error when going back
+      setError('');
+    }
+  };
+
+  // Reset the form to start over
+  const handleReset = () => {
+    setStep(0);
+    setName('');
+    setAge('');
+    setGrade('');
+    setSubject('');
+    setTopic('');
+    setLearningType('');
+    setMusicGenre('');
+    setLyrics('');
+    setSongUrl('');
+    setError('');
+    setSongGenerationId('');
+    setHasAttemptedSongGeneration(false);
+    setPollingStatus('');
+  };
+
+  // Retry song generation if it fails
+  const handleRetry = () => {
+    if (lyrics) {
+      // Reset error state before attempting again
+      setError('');
+      // Even though we're manually retrying, reset the attempt flag to avoid duplicate retries
+      setHasAttemptedSongGeneration(true);
+      generateSong();
+    } else {
+      generateLyrics();
     }
   };
 
@@ -271,7 +461,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
       <div className="app-container">
         <header className="app-header">
           <h1>Educational Song Generator</h1>
-          <p>Learn through music!</p>
+          <p>Transform learning into a musical adventure! Create custom educational songs to make studying fun.</p>
         </header>
 
         <main className="app-main">
@@ -300,6 +490,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
                     onChange={(e) => setName(e.target.value)}
                     className="input-field"
                     placeholder="Enter your name"
+                    ref={inputRefs.name}
                   />
                 </div>
               )}
@@ -315,6 +506,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
                     placeholder="Enter your age"
                     min="5"
                     max="18"
+                    ref={inputRefs.age}
                   />
                 </div>
               )}
@@ -326,6 +518,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
                     value={grade}
                     onChange={(e) => setGrade(e.target.value)}
                     className="input-field"
+                    ref={inputRefs.grade}
                   >
                     <option value="">Select your grade</option>
                     <option value="8">Grade 8</option>
@@ -362,6 +555,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
                     value={topic}
                     onChange={(e) => setTopic(e.target.value)}
                     className="input-field"
+                    ref={inputRefs.topic}
                   >
                     <option value="">Select a topic</option>
                     {subject === 'Math' && 
@@ -422,6 +616,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
                   <button
                     onClick={handleBack}
                     className="secondary-button"
+                    disabled={isLoading || lyricsLoading}
                   >
                     Back
                   </button>
@@ -430,16 +625,42 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
                   <button
                     onClick={handleNext}
                     className="primary-button"
+                    disabled={isLoading || lyricsLoading}
                   >
                     {step === 7 ? 'Generate' : 'Next'}
                   </button>
                 )}
               </div>
+              
+              <div className="keyboard-tip">
+                <small>Pro tip: Press <kbd>Enter</kbd> to continue to the next step</small>
+              </div>
+            </div>
+          )}
+
+          {/* Results Section - Lyrics Generation Loading */}
+          {step === 8 && lyricsLoading && (
+            <div className="results-panel">
+              <h2>Creating Your Educational Lyrics</h2>
+              
+              <div className="loading-container">
+                <p>Creating educational lyrics about {topic} in {musicGenre} style...</p>
+                <div className="loading-animation">
+                  <div className="loading-dot"></div>
+                  <div className="loading-dot"></div>
+                  <div className="loading-dot"></div>
+                  <div className="loading-dot"></div>
+                  <div className="loading-dot"></div>
+                </div>
+                <p className="loading-note">
+                  Crafting the perfect educational lyrics to help you learn about {topic}
+                </p>
+              </div>
             </div>
           )}
 
           {/* Results Section - Lyrics */}
-          {step === 8 && lyrics && !songUrl && (
+          {step === 8 && lyrics && !songUrl && !lyricsLoading && (
             <div className="results-panel">
               <h2>Your Educational Lyrics</h2>
               <div className="lyrics-container">
@@ -448,9 +669,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
               
               {isLoading ? (
                 <div className="loading-container">
-                  <p>
-                    {songGenerationId ? 'Creating your song with Suno...' : 'Generating your lyrics with AI...'}
-                  </p>
+                  <p>{pollingStatus || 'Creating your song...'}</p>
                   <div className="loading-animation">
                     <div className="loading-dot"></div>
                     <div className="loading-dot"></div>
@@ -458,11 +677,9 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
                     <div className="loading-dot"></div>
                     <div className="loading-dot"></div>
                   </div>
-                  {songGenerationId && (
-                    <p className="loading-note">
-                      Song generation may take 1-2 minutes. Please wait...
-                    </p>
-                  )}
+                  <p className="loading-note">
+                    Song generation typically takes 1-2 minutes. Please wait...
+                  </p>
                 </div>
               ) : (
                 <div className="navigation-buttons">
@@ -473,7 +690,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
                     Back
                   </button>
                   <button
-                    onClick={generateSong}
+                    onClick={handleRetry}
                     className="primary-button"
                   >
                     Generate Song
@@ -483,7 +700,12 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
               
               {error && (
                 <div className="error-container">
-                  {error}
+                  <p>{error}</p>
+                  {!isLoading && (
+                    <button onClick={handleRetry} className="retry-button">
+                      Try Again
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -513,7 +735,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
               
               <div className="navigation-buttons">
                 <button
-                  onClick={() => setStep(0)}
+                  onClick={handleReset}
                   className="secondary-button"
                 >
                   Start Over
@@ -521,6 +743,8 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
                 <a
                   href={songUrl}
                   download={`${name}_${subject}_${topic}_song.mp3`}
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="primary-button"
                 >
                   Download Song
@@ -537,7 +761,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
               <p className="development-note">This feature is currently in development.</p>
               
               <button
-                onClick={() => setStep(0)}
+                onClick={handleReset}
                 className="primary-button"
               >
                 Start Over
@@ -547,7 +771,6 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
         </main>
 
         <footer className="app-footer">
-          <p>Educational Song Generator - Designed for student learning</p>
           <p>Created by Inaaya Zia</p>
         </footer>
       </div>
