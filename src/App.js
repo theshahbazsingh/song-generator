@@ -108,7 +108,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
     }
   };
 
-  // Send lyrics to Suno API and get back a song
+  // Send lyrics to the song generation API
   const generateSong = async () => {
     setIsLoading(true);
     setError('');
@@ -117,52 +117,81 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
       // Create a title from the subject and topic
       const songTitle = `${subject} - ${topic} Learning Song`;
       
-      // Create data object for Suno API
-      const sunoData = JSON.stringify({
-        prompt: lyrics,
-        style: musicGenre,
-        title: songTitle,
-        customMode: true,
-        instrumental: false, // We want vocals for our educational songs
-        model: "V3_5",       // Using Suno's V3_5 model
-        negativeTags: "Explicit language, Inappropriate content"
-      });
+      // Create data object for the song generation API based on documentation
+      const songData = {
+        prompt: lyrics,                  // Using our generated lyrics as the prompt (will be exact lyrics)
+        style: musicGenre,               // The music style/genre
+        title: songTitle,                // Title of the track
+        customMode: true,                // Using custom mode since we have specific lyrics
+        instrumental: false,             // We want vocals for our educational songs
+        model: "V3_5",                   // Using V3_5 model
+        negativeTags: "Explicit language, Inappropriate content",
+        callBackUrl: window.location.origin + "/callback"  // Using current origin with /callback
+      };
       
-      // Step 1: Initiate song generation with Suno API
+      // Log the request data for debugging
+      console.log("Song generation request:", songData);
+      
+      // Step 1: Initiate song generation with the API
       const createResponse = await axios.post(
-        'https://api.sunoapi.org/api/v1/create',
-        sunoData,
+        'https://apibox.erweima.ai/api/v1/generate',
+        songData,
         {
           headers: {
             'Content-Type': 'application/json',
+            'Accept': 'application/json',
             'Authorization': `Bearer ${process.env.REACT_APP_SUNO_API_KEY}`
           }
         }
       );
       
-      // Store the generation ID for polling
-      const generationId = createResponse.data.id;
-      setSongGenerationId(generationId);
+      console.log("API response:", createResponse.data);
+      
+      // Check if the API request was successful
+      if (createResponse.data.code !== 200) {
+        throw new Error(`API Error: ${createResponse.data.msg || 'Unknown error'}`);
+      }
+      
+      // Store the task ID for polling - adjust based on actual response structure
+      const taskId = createResponse.data.data?.task_id || createResponse.data.data?.id;
+      setSongGenerationId(taskId);
       
       // Step 2: Poll for song generation completion
       const checkSongStatus = async () => {
         try {
           const statusResponse = await axios.get(
-            `https://api.sunoapi.org/api/v1/status/${generationId}`,
+            `https://apibox.erweima.ai/api/v1/task/${taskId}`,
             {
               headers: {
+                'Accept': 'application/json',
                 'Authorization': `Bearer ${process.env.REACT_APP_SUNO_API_KEY}`
               }
             }
           );
           
-          const status = statusResponse.data.status;
+          console.log("Status response:", statusResponse.data);
           
-          if (status === 'completed') {
+          // Check if the status API request was successful
+          if (statusResponse.data.code !== 200) {
+            throw new Error(`Status API Error: ${statusResponse.data.msg || 'Unknown error'}`);
+          }
+          
+          // Extract status from response - adjust based on actual response structure
+          const status = statusResponse.data.data?.status;
+          
+          if (status === 'completed' || status === 'complete') {
             // Song is ready, get the URL
-            setSongUrl(statusResponse.data.audio_url);
+            // The structure here depends on the actual API response
+            const audioUrl = statusResponse.data.data?.data?.[0]?.audio_url || 
+                            statusResponse.data.data?.audio_url;
+                            
+            if (!audioUrl) {
+              throw new Error('No audio URL found in the completed response');
+            }
+            
+            setSongUrl(audioUrl);
             setIsLoading(false);
-          } else if (status === 'failed') {
+          } else if (status === 'failed' || status === 'error') {
             setError('Song generation failed. Please try again.');
             setIsLoading(false);
           } else {
@@ -171,7 +200,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
           }
         } catch (err) {
           console.error('Error checking song status:', err);
-          setError('Failed to check song status. Please try again.');
+          setError('Failed to check song status: ' + (err.message || 'Unknown error'));
           setIsLoading(false);
         }
       };
@@ -379,7 +408,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
                         onClick={() => setMusicGenre(genre)}
                         className={`genre-button ${musicGenre === genre ? 'selected' : ''}`}
                       >
-                        {genre}
+                        <span>{genre}</span>
                       </button>
                     ))}
                   </div>
@@ -423,6 +452,8 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
                     {songGenerationId ? 'Creating your song with Suno...' : 'Generating your lyrics with AI...'}
                   </p>
                   <div className="loading-animation">
+                    <div className="loading-dot"></div>
+                    <div className="loading-dot"></div>
                     <div className="loading-dot"></div>
                     <div className="loading-dot"></div>
                     <div className="loading-dot"></div>
