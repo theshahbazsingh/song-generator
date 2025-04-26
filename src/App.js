@@ -11,7 +11,8 @@ function App() {
   const [grade, setGrade] = useState('');
   const [subject, setSubject] = useState('');
   const [topic, setTopic] = useState('');
-  const [learningType, setLearningType] = useState('');
+  const [customTopic, setCustomTopic] = useState('');
+  const [isCustomTopic, setIsCustomTopic] = useState(false);
   const [musicGenre, setMusicGenre] = useState('');
   
   // State for app functionality
@@ -34,7 +35,8 @@ function App() {
     name: useRef(null),
     age: useRef(null),
     grade: useRef(null),
-    topic: useRef(null)
+    topic: useRef(null),
+    customTopic: useRef(null)
   };
 
   // Max retries for API calls
@@ -70,7 +72,7 @@ function App() {
     "Physical and chemical change"
   ];
 
-  // Questions array
+  // Questions array - removed flash card question
   const questions = [
     { id: 'welcome', text: "Welcome, let's explore together AI assisted learning in a fun way!" },
     { id: 'name', text: "What is your name?" },
@@ -78,7 +80,6 @@ function App() {
     { id: 'grade', text: "What grade are you in?" },
     { id: 'subject', text: "What subject are you interested in? Math or Science?" },
     { id: 'topic', text: "What topic would you like to learn about?" },
-    { id: 'learningType', text: "Would you like to have flash cards or a song?" },
     { id: 'musicGenre', text: "What type of music genre do you prefer? Pop, Hip hop, Rock, or Soul?" }
   ];
 
@@ -87,27 +88,49 @@ function App() {
     if (e.key === 'Enter' && !isLoading && !lyricsLoading) {
       handleNext();
     }
-  }, [step, name, age, grade, subject, topic, learningType, musicGenre, isLoading, lyricsLoading]);
+  }, [step, name, age, grade, subject, topic, customTopic, isCustomTopic, musicGenre, isLoading, lyricsLoading]);
 
+  // Track if we're currently typing in the custom topic field
+  const [isTypingCustomTopic, setIsTypingCustomTopic] = useState(false);
+  
   // Set up key listeners for each step
   useEffect(() => {
     document.addEventListener('keydown', handleKeyPress);
     
-    // Focus the appropriate input field based on the current step
-    if (step === 1 && inputRefs.name.current) {
-      inputRefs.name.current.focus();
-    } else if (step === 2 && inputRefs.age.current) {
-      inputRefs.age.current.focus();
-    } else if (step === 3 && inputRefs.grade.current) {
-      inputRefs.grade.current.focus();
-    } else if (step === 5 && inputRefs.topic.current) {
-      inputRefs.topic.current.focus();
+    // Only set focus when changing steps, not during typing
+    if (!isTypingCustomTopic) {
+      if (step === 1 && inputRefs.name.current) {
+        inputRefs.name.current.focus();
+      } else if (step === 2 && inputRefs.age.current) {
+        inputRefs.age.current.focus();
+      } else if (step === 3 && inputRefs.grade.current) {
+        inputRefs.grade.current.focus();
+      } else if (step === 5 && inputRefs.topic.current && !isCustomTopic) {
+        inputRefs.topic.current.focus();
+      }
     }
     
     return () => {
       document.removeEventListener('keydown', handleKeyPress);
     };
-  }, [step, handleKeyPress]);
+  }, [step, handleKeyPress, isTypingCustomTopic, isCustomTopic]);
+  
+  // Handle custom topic focus separately when the "Other" option is selected
+  useEffect(() => {
+    if (step === 5 && isCustomTopic && inputRefs.customTopic.current && !isTypingCustomTopic) {
+      inputRefs.customTopic.current.focus();
+    }
+  }, [isCustomTopic, step, isTypingCustomTopic]);
+
+  // Track topic selection changes
+  useEffect(() => {
+    if (topic === "Other") {
+      setIsCustomTopic(true);
+    } else {
+      setIsCustomTopic(false);
+      setCustomTopic('');
+    }
+  }, [topic]);
 
   // Generate lyrics using OpenAI SDK
   const generateLyrics = async () => {
@@ -115,14 +138,17 @@ function App() {
     setError('');
     
     try {
+      // Get the actual topic (either selected from list or custom entered)
+      const selectedTopic = topic === "Other" ? customTopic : topic;
+      
       // Create a prompt for OpenAI based on user inputs
       const instructionsPrompt = `
 You are an educational songwriting assistant created by Inaaya Zia.
-Create educational song lyrics about ${topic} in ${subject} for a grade ${grade} student named ${name}.
+Create educational song lyrics about ${selectedTopic} in ${subject} for a grade ${grade} student named ${name}.
 The song should be in ${musicGenre} style.
 The lyrics should be informative, accurate, and easy to remember.
 Include verses, chorus, and bridge sections.
-Make it catchy and fun while ensuring all important educational content about ${topic} is covered.
+Make it catchy and fun while ensuring all important educational content about ${selectedTopic} is covered.
 Format the output with clear section labels (Verse 1, Chorus, etc.).
       `;
       
@@ -164,7 +190,8 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
     
     try {
       // Create a title from the subject and topic
-      const songTitle = `${subject} - ${topic} Learning Song`;
+      const selectedTopic = topic === "Other" ? customTopic : topic;
+      const songTitle = `${subject} - ${selectedTopic} Learning Song`;
       
       // Create data object for the song generation API
       const songData = {
@@ -202,7 +229,6 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
       }
       
       // Extract the task ID - check ALL possible formats from API response
-      // The API seems to return taskId (camelCase) but our code was looking for task_id (snake_case)
       const taskId = createResponse.data.data?.taskId || 
                      createResponse.data.data?.task_id || 
                      createResponse.data.data?.id;
@@ -214,7 +240,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
       setSongGenerationId(taskId);
       setPollingStatus('Song generation started. Creating your educational song...');
       
-      // Start polling for completion
+      // Start polling for completion with exponential backoff
       pollSongStatus(taskId, 0);
       
     } catch (err) {
@@ -245,7 +271,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
     }
   };
 
-  // Poll for song generation completion
+  // Poll for song generation completion with better error handling
   const pollSongStatus = async (taskId, attempt = 0) => {
     // Safety check to prevent infinite polling
     if (attempt > 60) { // Stop after 5 minutes (60 * 5s = 300s = 5min)
@@ -255,9 +281,11 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
     }
     
     try {
+      // Calculate backoff time for exponential backoff (starts at 5s, then 5.5s, 6.05s, etc.)
+      const backoffTime = POLLING_INTERVAL * (1 + (0.1 * Math.min(attempt, 10)));
       setPollingStatus(`Checking song status... (Attempt ${attempt + 1})`);
       
-      // Use the correct endpoint for checking task status as per the Suno API documentation
+      // Use the correct endpoint for checking task status
       const statusResponse = await axios.get(
         `https://apibox.erweima.ai/api/v1/generate/record-info`, 
         {
@@ -277,7 +305,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
         throw new Error(`Status API Error: ${statusResponse.data.msg || 'Unknown error'}`);
       }
       
-      // Extract status from response - based on the actual response structure from the logs
+      // Extract status from response
       const status = statusResponse.data.data?.status;
       
       if (status === 'SUCCESS') {
@@ -327,7 +355,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
         setPollingStatus('');
       } else if (status === 'PENDING' || status === 'TEXT_SUCCESS' || status === 'FIRST_SUCCESS') {
         // These are intermediate statuses according to the documentation
-        // Map the status to a user-friendly message - make it more intuitive without technical details
+        // Map the status to a user-friendly message
         let statusMessage = 'Creating your song...';
         let progressPercentage = 25;
         
@@ -335,7 +363,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
           statusMessage = `Starting to create your song...`;
           progressPercentage = 25;
         } else if (status === 'TEXT_SUCCESS') {
-          statusMessage = `Working on your ${musicGenre} song about ${topic}...`;
+          statusMessage = `Working on your ${musicGenre} song about ${topic === "Other" ? customTopic : topic}...`;
           progressPercentage = 50;
         } else if (status === 'FIRST_SUCCESS') {
           statusMessage = `Almost done! Putting the finishing touches on your song...`;
@@ -344,12 +372,12 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
         
         setPollingStatus(`${statusMessage} (${progressPercentage}% complete)`);
         
-        // Still processing, check again after delay
-        setTimeout(() => pollSongStatus(taskId, attempt + 1), POLLING_INTERVAL);
+        // Still processing, check again after calculated delay
+        setTimeout(() => pollSongStatus(taskId, attempt + 1), backoffTime);
       } else {
         // Unknown status
         setPollingStatus(`Creating your song... Please wait.`);
-        setTimeout(() => pollSongStatus(taskId, attempt + 1), POLLING_INTERVAL);
+        setTimeout(() => pollSongStatus(taskId, attempt + 1), backoffTime);
       }
     } catch (err) {
       console.error('Error checking song status:', err);
@@ -357,7 +385,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
       // Only handle errors with continued polling - don't retry status checks if they fail badly
       if (err.code === 'ECONNABORTED' || err.message.includes('timeout')) {
         setPollingStatus('Your song is still being created. Please wait...');
-        setTimeout(() => pollSongStatus(taskId, attempt + 1), POLLING_INTERVAL);
+        setTimeout(() => pollSongStatus(taskId, attempt + 1), POLLING_INTERVAL * 1.5);
       } else if (err.response && err.response.status === 429) {
         setPollingStatus('Still working on your song. This may take a minute...');
         // Wait longer between polls if we're hitting rate limits
@@ -374,10 +402,15 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
   // Handle song generation after lyrics are created
   useEffect(() => {
     // Only auto-generate if we have lyrics, we're on the right step, and we haven't tried yet
-    if (lyrics && step === 8 && !songUrl && !isLoading && !lyricsLoading && !hasAttemptedSongGeneration) {
+    if (lyrics && step === 7 && !songUrl && !isLoading && !lyricsLoading && !hasAttemptedSongGeneration) {
       generateSong();
     }
   }, [lyrics, step, songUrl, isLoading, lyricsLoading, hasAttemptedSongGeneration]);
+
+  // Get current effective topic (either selected or custom)
+  const getEffectiveTopic = () => {
+    return isCustomTopic ? customTopic : topic;
+  };
 
   // Handle next step in questionnaire
   const handleNext = () => {
@@ -394,21 +427,18 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
     } else if (step === 4 && !subject) {
       setError('Please select a subject');
       return;
-    } else if (step === 5 && !topic) {
-      setError('Please select a topic');
+    } else if (step === 5 && (!topic || (isCustomTopic && !customTopic))) {
+      setError(isCustomTopic ? 'Please enter your custom topic' : 'Please select a topic');
       return;
-    } else if (step === 6 && !learningType) {
-      setError('Please select flash cards or song');
-      return;
-    } else if (step === 7 && learningType === 'song' && !musicGenre) {
+    } else if (step === 6 && !musicGenre) {
       setError('Please select a music genre');
       return;
     }
     
     setError('');
     
-    // If we're at the end of questions and selected "song", generate lyrics
-    if (step === 7 && learningType === 'song') {
+    // If we're at the end of questions, generate lyrics
+    if (step === 6) {
       generateLyrics();
     }
     
@@ -433,7 +463,8 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
     setGrade('');
     setSubject('');
     setTopic('');
-    setLearningType('');
+    setCustomTopic('');
+    setIsCustomTopic(false);
     setMusicGenre('');
     setLyrics('');
     setSongUrl('');
@@ -466,7 +497,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
 
         <main className="app-main">
           {/* Questionnaire Section */}
-          {step < 8 && (
+          {step < 7 && (
             <div className="question-panel">
               {step === 0 && (
                 <div className="welcome-screen">
@@ -524,6 +555,8 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
                     <option value="8">Grade 8</option>
                     <option value="9">Grade 9</option>
                     <option value="10">Grade 10</option>
+                    <option value="11">Grade 11</option>
+                    <option value="12">Grade 12</option>
                   </select>
                 </div>
               )}
@@ -568,31 +601,29 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
                         <option key={i} value={t}>{t}</option>
                       ))
                     }
+                    <option value="Other">Other (Type your own)</option>
                   </select>
+                  
+                  {isCustomTopic && (
+                    <input 
+                      type="text"
+                      value={customTopic}
+                      onChange={(e) => {
+                        setIsTypingCustomTopic(true);
+                        setCustomTopic(e.target.value);
+                      }}
+                      onFocus={() => setIsTypingCustomTopic(true)}
+                      onBlur={() => setIsTypingCustomTopic(false)}
+                      className="input-field"
+                      placeholder="Enter your topic"
+                      ref={inputRefs.customTopic}
+                      style={{marginTop: '15px'}}
+                    />
+                  )}
                 </div>
               )}
 
               {step === 6 && (
-                <div>
-                  <h2>{questions[step].text}</h2>
-                  <div className="button-group">
-                    <button
-                      onClick={() => setLearningType('flashcard')}
-                      className={`option-button ${learningType === 'flashcard' ? 'selected' : ''}`}
-                    >
-                      Flash Cards
-                    </button>
-                    <button
-                      onClick={() => setLearningType('song')}
-                      className={`option-button ${learningType === 'song' ? 'selected' : ''}`}
-                    >
-                      Song
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {step === 7 && learningType === 'song' && (
                 <div>
                   <h2>{questions[step].text}</h2>
                   <div className="genre-grid">
@@ -627,7 +658,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
                     className="primary-button"
                     disabled={isLoading || lyricsLoading}
                   >
-                    {step === 7 ? 'Generate' : 'Next'}
+                    {step === 6 ? 'Generate' : 'Next'}
                   </button>
                 )}
               </div>
@@ -639,12 +670,12 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
           )}
 
           {/* Results Section - Lyrics Generation Loading */}
-          {step === 8 && lyricsLoading && (
+          {step === 7 && lyricsLoading && (
             <div className="results-panel">
               <h2>Creating Your Educational Lyrics</h2>
               
               <div className="loading-container">
-                <p>Creating educational lyrics about {topic} in {musicGenre} style...</p>
+                <p>Creating educational lyrics about {isCustomTopic ? customTopic : topic} in {musicGenre} style...</p>
                 <div className="loading-animation">
                   <div className="loading-dot"></div>
                   <div className="loading-dot"></div>
@@ -653,14 +684,14 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
                   <div className="loading-dot"></div>
                 </div>
                 <p className="loading-note">
-                  Crafting the perfect educational lyrics to help you learn about {topic}
+                  Crafting the perfect educational lyrics to help you learn about {isCustomTopic ? customTopic : topic}
                 </p>
               </div>
             </div>
           )}
 
           {/* Results Section - Lyrics */}
-          {step === 8 && lyrics && !songUrl && !lyricsLoading && (
+          {step === 7 && lyrics && !songUrl && !lyricsLoading && (
             <div className="results-panel">
               <h2>Your Educational Lyrics</h2>
               <div className="lyrics-container">
@@ -712,7 +743,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
           )}
 
           {/* Results Section - Song */}
-          {step === 8 && songUrl && (
+          {step === 7 && songUrl && (
             <div className="results-panel">
               <h2>Your Educational Song</h2>
               
@@ -733,6 +764,10 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
                 </div>
               </div>
               
+              <div className="suno-credit">
+                <p>Want to create a melody for this song? Visit <a href="https://suno.com" target="_blank" rel="noopener noreferrer">Suno.com</a></p>
+              </div>
+              
               <div className="navigation-buttons">
                 <button
                   onClick={handleReset}
@@ -742,7 +777,7 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
                 </button>
                 <a
                   href={songUrl}
-                  download={`${name}_${subject}_${topic}_song.mp3`}
+                  download={`${name}_${subject}_${isCustomTopic ? customTopic : topic}_song.mp3`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="primary-button"
@@ -750,22 +785,6 @@ Format the output with clear section labels (Verse 1, Chorus, etc.).
                   Download Song
                 </a>
               </div>
-            </div>
-          )}
-
-          {/* Flash Card Section */}
-          {step === 8 && learningType === 'flashcard' && (
-            <div className="results-panel">
-              <h2>Flash Cards Feature</h2>
-              <p>Flash card functionality would be implemented here.</p>
-              <p className="development-note">This feature is currently in development.</p>
-              
-              <button
-                onClick={handleReset}
-                className="primary-button"
-              >
-                Start Over
-              </button>
             </div>
           )}
         </main>
